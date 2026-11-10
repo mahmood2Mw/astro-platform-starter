@@ -1,5 +1,5 @@
 import React from 'react';
-import { AbsoluteFill, interpolate, random, useCurrentFrame } from 'remotion';
+import { AbsoluteFill, Img, interpolate, random, staticFile, useCurrentFrame } from 'remotion';
 import { C, FONT, GoldLogo, Icon, clamp, ease, easeInOut, goldText } from './theme';
 
 /* ------------------------------------------------------------------ */
@@ -309,54 +309,125 @@ export const Background: React.FC = () => {
 /* ------------------------------------------------------------------ */
 /* Main banner (rebuilt from the supplied header banner) + HUD frame   */
 /* ------------------------------------------------------------------ */
+/** Top banner: the institute's own banner artwork (public/banner-ink.png, cleaned
+ *  and upscaled from the supplied banner) on a pearl card with gold frame,
+ *  maroon/gold accent rule, unfold entrance and a periodic light sweep. */
 export const HeaderBanner: React.FC<{ from: number; to: number }> = ({ from, to }) => {
   const frame = useCurrentFrame();
-  const inP = interpolate(frame, [from, from + 18], [0, 1], { ...clamp, easing: ease });
-  const outP = interpolate(frame, [to - 12, to], [0, 1], clamp);
   if (frame < from || frame > to) return null;
-  const shine = ((frame - from) * 3) % 400 - 100;
+  const f = frame - from;
+  const drop = interpolate(f, [0, 16], [0, 1], { ...clamp, easing: ease });
+  const unfold = interpolate(f, [4, 22], [0, 1], { ...clamp, easing: ease });
+  const ink = interpolate(f, [12, 34], [0, 1], { ...clamp, easing: ease });
+  const rule = interpolate(f, [20, 40], [0, 1], { ...clamp, easing: ease });
+  const out = interpolate(frame, [to - 12, to], [0, 1], clamp);
+  const sweep = ((f - 30) % 150) / 150; // light sweep every 5 s
+  const sweepX = interpolate(sweep, [0, 0.35], [-30, 130], clamp);
   return (
     <div
       style={{
         position: 'absolute',
-        top: 70,
-        left: 40,
-        right: 40,
-        height: 150,
-        opacity: inP * (1 - outP),
-        transform: `translateY(${(1 - inP) * -180}px)`,
-        borderRadius: 34,
-        background: 'linear-gradient(180deg, rgba(10,22,48,0.85), rgba(10,22,48,0.6))',
-        border: `1.5px solid ${C.gold}66`,
-        boxShadow: `0 20px 50px rgba(0,0,0,0.5), 0 0 30px ${C.gold}22, inset 0 1px 0 rgba(255,255,255,0.12)`,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: '0 34px 0 30px',
-        direction: 'rtl',
-        fontFamily: FONT,
-        overflow: 'hidden',
+        top: 48,
+        left: 34,
+        right: 34,
+        height: 172,
+        opacity: 1 - out,
+        transform: `translateY(${(1 - drop) * -230 - out * 60}px)`,
+        filter: `drop-shadow(0 18px 30px rgba(0,0,0,0.55)) drop-shadow(0 0 22px ${C.gold}33)`,
       }}
     >
-      {/* sheen */}
-      <div style={{ position: 'absolute', top: 0, bottom: 0, right: `${shine}%`, width: 140, background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.10), transparent)', transform: 'skewX(-20deg)' }} />
-      {/* logo + name */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-        <GoldLogo height={118} glow={0.7} />
-        <div>
-          <div style={{ fontWeight: 900, fontSize: 50, lineHeight: 1.15, ...goldText(shine * 0.6) }}>معهد اليقين الدولي</div>
-          <div style={{ fontWeight: 800, fontSize: 19.5, letterSpacing: 1.2, color: C.white, direction: 'ltr', textAlign: 'right' }}>ALYAQIN INTERNATIONAL INSTITUTE</div>
+      {/* gold frame */}
+      <div
+        style={{
+          position: 'absolute',
+          inset: 0,
+          borderRadius: 30,
+          padding: 3,
+          background: `linear-gradient(120deg, ${C.goldDeep}, ${C.gold2}, ${C.gold}, ${C.goldDeep})`,
+          clipPath: `inset(0 ${(1 - unfold) * 50}% 0 ${(1 - unfold) * 50}% round 30px)`,
+        }}
+      >
+        {/* pearl card */}
+        <div
+          style={{
+            position: 'relative',
+            width: '100%',
+            height: '100%',
+            borderRadius: 27,
+            overflow: 'hidden',
+            background: 'linear-gradient(180deg, #ffffff 0%, #f7f2ea 60%, #efe6d8 100%)',
+            boxShadow: 'inset 0 2px 0 rgba(255,255,255,0.9), inset 0 -10px 24px rgba(142,15,58,0.08)',
+          }}
+        >
+          {/* subtle pattern */}
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              backgroundImage: 'radial-gradient(rgba(142,15,58,0.07) 1.2px, transparent 1.2px)',
+              backgroundSize: '16px 16px',
+              WebkitMaskImage: 'linear-gradient(90deg, black, transparent 35%, transparent 65%, black)',
+              maskImage: 'linear-gradient(90deg, black, transparent 35%, transparent 65%, black)',
+            }}
+          />
+          {/* banner artwork, revealed right-to-left (RTL) */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 40,
+              right: 40,
+              top: 18,
+              bottom: 30,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              clipPath: `inset(0 0 0 ${(1 - ink) * 100}%)`,
+            }}
+          >
+            <Img src={staticFile('banner-ink.png')} style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          </div>
+          {/* light sweep */}
+          <div
+            style={{
+              position: 'absolute',
+              top: -20,
+              bottom: -20,
+              left: `${sweepX}%`,
+              width: 160,
+              background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.85), transparent)',
+              transform: 'skewX(-22deg)',
+              mixBlendMode: 'overlay',
+            }}
+          />
+          {/* accent rule: maroon → gold */}
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 12,
+              right: 40,
+              height: 6,
+              width: `${rule * 52}%`,
+              borderRadius: 3,
+              background: `linear-gradient(270deg, ${C.maroon}, ${C.crimson}, ${C.gold})`,
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 12,
+              left: 40,
+              height: 6,
+              width: `${rule * 26}%`,
+              borderRadius: 3,
+              background: `linear-gradient(90deg, ${C.goldDeep}, ${C.gold})`,
+              opacity: 0.8,
+            }}
+          />
         </div>
-      </div>
-      <div style={{ width: 3, height: 96, background: GOLD_DIVIDER, borderRadius: 2 }} />
-      <div style={{ textAlign: 'center' }}>
-        <div style={{ fontWeight: 800, fontSize: 34, color: C.white, lineHeight: 1.25 }}>محافظة الظاهرة</div>
-        <div style={{ fontWeight: 800, fontSize: 34, color: C.gold, lineHeight: 1.25 }}>ولاية عبري</div>
       </div>
     </div>
   );
 };
-const GOLD_DIVIDER = `linear-gradient(180deg, transparent, ${C.gold}, transparent)`;
 
 export const HudFrame: React.FC<{ from: number; to: number }> = ({ from, to }) => {
   const frame = useCurrentFrame();
