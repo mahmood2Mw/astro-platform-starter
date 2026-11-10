@@ -9,7 +9,7 @@ export type TT = 'none' | 'zoom' | 'iris' | 'glitch' | 'push' | 'flash' | 'diago
 export const T = 16; // overlap frames between scenes
 
 type Style = React.CSSProperties;
-const enterStyle = (t: TT, p: number, f: number): Style => {
+export const enterStyle = (t: TT, p: number, f: number): Style => {
   const q = easeInOut(p);
   switch (t) {
     case 'zoom':
@@ -50,7 +50,7 @@ const enterStyle = (t: TT, p: number, f: number): Style => {
   }
 };
 
-const exitStyle = (t: TT, p: number, f: number): Style => {
+export const exitStyle = (t: TT, p: number, f: number): Style => {
   if (p <= 0) return {};
   const q = easeInOut(p);
   switch (t) {
@@ -86,7 +86,7 @@ const merge = (a: Style, b: Style): Style => ({
 });
 
 /* Overlay FX drawn on top of the incoming scene during its entrance */
-const TransitionFX: React.FC<{ t: TT; p: number; f: number }> = ({ t, p, f }) => {
+export const TransitionFX: React.FC<{ t: TT; p: number; f: number }> = ({ t, p, f }) => {
   if (p <= 0 || p >= 1) return null;
   const s = Math.sin(p * Math.PI);
   const q = easeInOut(p);
@@ -185,19 +185,6 @@ const TransitionFX: React.FC<{ t: TT; p: number; f: number }> = ({ t, p, f }) =>
     default:
       return null;
   }
-};
-
-export const SceneShell: React.FC<{ dur: number; enter: TT; exit: TT; children: React.ReactNode }> = ({ dur, enter, exit, children }) => {
-  const f = useCurrentFrame();
-  const pin = enter === 'none' ? 1 : interpolate(f, [0, T], [0, 1], clamp);
-  const pout = exit === 'none' ? 0 : interpolate(f, [dur - T, dur], [0, 1], clamp);
-  const style = merge(enterStyle(enter, pin, f), exitStyle(exit, pout, f));
-  return (
-    <>
-      <AbsoluteFill style={{ ...style, transformOrigin: '50% 46%' }}>{children}</AbsoluteFill>
-      <TransitionFX t={enter} p={pin} f={f} />
-    </>
-  );
 };
 
 /* ------------------------------------------------------------------ */

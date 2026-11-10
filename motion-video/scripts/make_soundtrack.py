@@ -4,9 +4,10 @@ Usage: python3 scripts/make_soundtrack.py public/soundtrack.wav   (needs numpy +
 
 - Music: 120 BPM cinematic-tech groove (Am-F-C-G), side-chained pads, plucks with
   ping-pong delay, soft kick/clap/shaker. Drums drop at the first cut, stop for the outro.
-- Each scene cut has its OWN transition sound matching the visual technique
-  (zoom, iris, glitch, push, flash, diagonal, flip, blinds) — all soft, filtered
-  and sent to a shared reverb, so nothing sounds harsh or "stock".
+- Transition & accent FX are built from REAL recorded CC0 samples (Kenney, see
+  assets/sfx): slowed card-slides become soft cinematic swishes, glass hits become
+  shimmers, plus reversed-reverb pre-swells and sub hits. Each cut has its own sound
+  matching its visual technique; everything sits under the music, nothing harsh.
 """
 import sys, wave
 import numpy as np
@@ -49,7 +50,7 @@ def tvec(d):
 
 def adsr(n, a, r):
     e = np.ones(n)
-    na, nr = max(1, int(a * SR)), max(1, int(r * SR))
+    na, nr = max(1, min(n // 2, int(a * SR))), max(1, min(n // 2, int(r * SR)))
     e[:na] = np.linspace(0, 1, na)
     e[-nr:] *= np.linspace(1, 0, nr)
     return e
@@ -63,7 +64,7 @@ beat = 60 / BPM
 bar = beat * 4
 CHORDS = [[57, 60, 64, 69], [53, 57, 60, 65], [48, 52, 55, 64], [55, 59, 62, 67]]
 DROP = 76 / 30          # first cut: drums come in
-OUTRO = 792 / 30        # last cut: drums stop
+OUTRO = 800 / 30        # last cut: drums stop
 
 # pads (2 bars per chord) — detuned saws, low-passed
 pos, ci = 0.0, 0
@@ -148,133 +149,158 @@ for kt in kicks:
 music_bus *= duck[:, None]
 
 # ------------------------------------------------------------------ SOUND DESIGN
-def noise(d):
-    return rng.standard_normal(int(d * SR))
+# Real recorded CC0 samples (Kenney, assets/sfx) processed into cinematic FX:
+# slowed/pitched-down swishes, reversed-reverb swells, soft sub hits, glassy shimmers.
+import os, subprocess
+SFX_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets', 'sfx')
 
 
-def sweep_noise(d, f0, f1, q=0.6):
-    """band-limited noise whose centre frequency glides f0 -> f1"""
-    x = noise(d)
-    out = np.zeros_like(x)
-    blk = 1024
-    for s in range(0, len(x), blk):
-        fc = f0 + (f1 - f0) * (s / len(x))
-        lo, hi = fc * (1 - q / 2), min(fc * (1 + q / 2), SR / 2 - 100)
-        out[s : s + blk] = filt(x[max(0, s - 2048) : s + blk], 'bandpass', [lo, hi])[-len(x[s : s + blk]) :]
-    return out
+def load(name):
+    raw = subprocess.run(
+        ['ffmpeg', '-v', 'error', '-i', os.path.join(SFX_DIR, name), '-ac', '1', '-ar', str(SR), '-f', 'f32le', '-'],
+        capture_output=True, check=True,
+    ).stdout
+    x = np.frombuffer(raw, dtype=np.float32).astype(float)
+    return x / (np.max(np.abs(x)) + 1e-9)
 
 
-def boom(d=2.0, f=42):
-    t = tvec(d)
-    fr = f + 30 * np.exp(-t * 12)
-    return np.sin(2 * np.pi * np.cumsum(fr) / SR) * np.exp(-t * 2.2)
+def speed(x, factor):
+    """resample: factor < 1 = slower + lower (tape-style pitch down)"""
+    n = int(len(x) / factor)
+    return np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
 
 
-def bell(freqs, d=2.0, decay=3.0):
-    t = tvec(d)
-    return sum(np.sin(2 * np.pi * fr * t) * np.exp(-t * decay * (1 + i * 0.4)) / (1 + i) for i, fr in enumerate(freqs))
+def fade(x, a=0.01, r=0.05):
+    return x * adsr(len(x), a, r)
 
 
-def stereo_pan_sweep(x, p0, p1):
+def pan_sweep(x, p0, p1):
     p = np.linspace(p0, p1, len(x))
     return np.stack([x * np.sqrt((1 - p) / 2), x * np.sqrt((1 + p) / 2)], 1) * 1.41
 
 
-cut = lambda f: f / 30
+def rev_swell(x, d=1.0):
+    """reversed reverb tail: the classic pre-cut 'suck-in' swell"""
+    t = tvec(d)
+    ir = rng.standard_normal(len(t)) * np.exp(-t * 3.5)
+    tail = fftconvolve(x, filt(ir, 'lowpass', 7000))[: len(t) + len(x)]
+    sw = tail[::-1]
+    return sw / (np.max(np.abs(sw)) + 1e-9) * np.linspace(0, 1, len(sw)) ** 1.5
 
-# zoom-through (logo -> hook): rising air + sub drop
+
+def sub_hit(f=48, d=1.4):
+    t = tvec(d)
+    fr = f + 25 * np.exp(-t * 14)
+    return np.sin(2 * np.pi * np.cumsum(fr) / SR) * np.exp(-t * 3.2)
+
+
+slide = [load(f'card-slide-{i}.ogg') for i in (1, 3, 5, 7)]
+fan = load('card-fan-1.ogg')
+shove = load('card-shove-2.ogg')
+click = load('click_002.ogg')
+ticks = [load('tick_001.ogg'), load('tick_002.ogg')]
+glass = [load('glass_001.ogg'), load('glass_003.ogg')]
+confirm = load('confirmation_002.ogg')
+thud = [load('impactSoft_heavy_001.ogg'), load('impactSoft_heavy_003.ogg')]
+bellhit = load('impactBell_heavy_002.ogg')
+
+cut = lambda fr: fr / 30
+
+
+def swish(x, factor, lp=5000):
+    s = filt(speed(x, factor), 'lowpass', lp)
+    s = filt(s, 'highpass', 120)
+    return fade(s / (np.max(np.abs(s)) + 1e-9), 0.03, 0.15)
+
+
+# cut 1 — zoom-through: reversed-reverb swell into a deep slowed swish + sub
 c = cut(76)
-s = sweep_noise(0.7, 400, 5000) * np.sin(np.linspace(0, np.pi, int(0.7 * SR))) ** 2
-add(s, c - 0.6, 0.22, verb=0.4)
-add(boom(2.0, 38), c, 0.55, verb=0.3)
+sw = rev_swell(swish(slide[0], 0.6), 0.9)
+add(sw, c - len(sw) / SR, 0.10)
+s = swish(slide[0], 0.45, 3500)
+add(s, c - 0.12, 0.30, verb=0.35)
+add(sub_hit(42), c, 0.40)
 
-# iris (hook -> skills): reverse-cymbal swell + soft bell
-c = cut(180)
-t = tvec(0.9)
-sw = filt(noise(0.9), 'highpass', 3000) * (t / 0.9) ** 3
-add(sw, c - 0.85, 0.16, verb=0.6)
-add(bell([1318.5, 1975.5, 2637]), c, 0.06, verb=0.8)
+# cut 2 — clock wipe: fluttering card fan, slowed, swept across the stereo field
+c = cut(179)
+s = swish(fan, 0.7, 6000)
+add(pan_sweep(s, -0.7, 0.7), c - len(s) / SR * 0.5, 0.26, verb=0.3)
 
-# glitch (skills -> title): digital stutter blips
-c = cut(280)
-for j in range(7):
-    d = 0.025 + rng.random() * 0.03
-    tt = tvec(d)
-    fr = rng.choice([220, 440, 880, 1760])
-    sq = np.sign(np.sin(2 * np.pi * fr * tt)) * 0.5
-    sq = np.round(sq * 4) / 4  # bitcrush
-    add(sq * adsr(len(tt), 0.002, 0.005), c - 0.18 + j * 0.045, 0.06, pan=rng.uniform(-0.7, 0.7))
-add(filt(noise(0.15), 'bandpass', [1500, 6000]) * np.exp(-tvec(0.15) * 20), c, 0.1)
-add(boom(1.2, 50), c, 0.3)
+# cut 3 — glitch: micro-stutters built from real UI ticks/clicks
+c = cut(279)
+for j in range(6):
+    x = speed(ticks[j % 2] if j % 3 else click, rng.uniform(0.8, 1.6))
+    add(fade(x[: int(0.05 * SR)], 0.001, 0.01), c - 0.16 + j * 0.05, 0.14, pan=rng.uniform(-0.7, 0.7))
+add(thud[0] * 0.6, c + 0.02, 0.22)
 
-# push (title -> apps): stereo whoosh panned right -> left
-c = cut(376)
-s = sweep_noise(0.8, 300, 2500) * np.sin(np.linspace(0, np.pi, int(0.8 * SR))) ** 3
-add(stereo_pan_sweep(s, 0.9, -0.9), c - 0.45, 0.28, verb=0.35)
+# cut 4 — cube turn: heavy slow slide + soft body
+c = cut(374)
+s = swish(shove, 0.55, 3000)
+add(pan_sweep(s, 0.8, -0.8), c - len(s) / SR * 0.55, 0.30, verb=0.3)
+add(speed(thud[1], 0.8), c + 0.05, 0.25)
 
-# flash (apps -> cert): airy swell + shimmer chord
-c = cut(494)
-t = tvec(0.6)
-add(filt(noise(0.6), 'highpass', 5000) * (t / 0.6) ** 2, c - 0.55, 0.12, verb=0.5)
-add(bell([1760, 2217.5, 2637, 3520], 2.5, 1.8), c, 0.045, verb=1.0)
+# cut 5 — light leak: glass shimmer slowed into an airy bloom (+ reversed lead-in)
+c = cut(498)
+g = filt(speed(glass[0], 0.5), 'highpass', 400)
+sw = rev_swell(g, 0.8)
+add(sw, c - len(sw) / SR, 0.10)
+add(g, c, 0.16, verb=1.0)
+add(speed(glass[1], 0.75), c + 0.05, 0.10, verb=0.8, pan=0.3)
 
-# diagonal (cert -> details): quick swipe
-c = cut(584)
-s = sweep_noise(0.35, 2000, 600) * np.sin(np.linspace(0, np.pi, int(0.35 * SR)))
-add(stereo_pan_sweep(s, -0.8, 0.8), c - 0.2, 0.25, verb=0.3)
+# cut 6 — diagonal wipe: crisp swish, top-right to bottom-left
+c = cut(595)
+s = swish(slide[2], 0.75, 7000)
+add(pan_sweep(s, 0.7, -0.6), c - len(s) / SR * 0.5, 0.26, verb=0.25)
 
-# flip (details -> CTA): two card-flip transients + low whoosh
-c = cut(704)
-for j, dt in enumerate([-0.12, 0.05]):
-    add(filt(noise(0.05), 'bandpass', [800, 4000]) * np.exp(-tvec(0.05) * 60), c + dt, 0.18, pan=0.4 - j * 0.8)
-add(sweep_noise(0.5, 200, 800) * np.sin(np.linspace(0, np.pi, int(0.5 * SR))), c - 0.25, 0.15)
+# cut 7 — push-cut with flash: tight swish + punchy soft impact on the cut
+c = cut(714)
+s = swish(slide[3], 0.6, 5000)
+add(s, c - len(s) / SR * 0.85, 0.26, verb=0.2)
+add(thud[0], c, 0.32)
+add(speed(glass[1], 1.0), c, 0.05, verb=0.6)
 
-# blinds (CTA -> outro): 1.6 s riser into a cinematic hit
-c = cut(792)
-t = tvec(1.6)
-riser = sweep_noise(1.6, 300, 6000) * (t / 1.6) ** 2.5 + np.sin(2 * np.pi * (220 + 660 * (t / 1.6) ** 2) * t) * (t / 1.6) ** 2 * 0.15
-add(riser, c - 1.6, 0.2, verb=0.5)
-add(boom(3.0, 36), c, 0.75, verb=0.5)
-add(bell([880, 1318.5, 1760], 3.0, 1.2), c, 0.05, verb=1.0)
+# cut 8 — iris into outro: long reversed swell, then bell + sub, the finale
+c = cut(800)
+sw = rev_swell(filt(speed(bellhit, 0.6), 'lowpass', 6000), 1.4)
+add(sw, c - len(sw) / SR, 0.16)
+add(speed(bellhit, 0.7), c, 0.20, verb=0.9)
+add(sub_hit(38, 2.5), c, 0.55, verb=0.3)
 
 # ---- scene accents ----
-# logo reveal shimmer + flare hit
-add(filt(noise(1.2), 'highpass', 6000) * np.sin(np.linspace(0, np.pi, int(1.2 * SR))), 0.1, 0.06, verb=0.8)
-add(bell([1046.5, 1568, 2093], 2.5, 1.5), 1.0, 0.05, verb=0.9)
-add(boom(2.0, 40), 1.0, 0.35, verb=0.4)
+# logo reveal: slowed glass bloom + sub as the logo lights up
+add(rev_swell(filt(speed(glass[0], 0.6), 'highpass', 300), 0.9), 0.05, 0.08)
+add(speed(glass[0], 0.55), 1.0, 0.14, verb=0.9)
+add(sub_hit(40), 1.0, 0.30, verb=0.3)
 
-# hops up the staircase (rising pentatonic plinks)
-for j, m in enumerate([72, 74, 76, 79]):
-    tt = tvec(0.3)
-    add(np.sin(2 * np.pi * mid(m) * tt) * np.exp(-tt * 14), cut(68 + 26 + (j + 1) * 11), 0.07, verb=0.4, pan=-0.3 + j * 0.2)
-add(bell([2093, 2637, 3136], 1.5, 3), cut(144), 0.05, verb=0.8)
-
-# laptop: key taps during Word, mouse clicks per app
-for j in range(18):
-    add(filt(noise(0.02), 'bandpass', [2000, 7000]) * np.exp(-tvec(0.02) * 250), cut(382) + j * 0.06 + rng.random() * 0.02, 0.05, pan=rng.uniform(-0.3, 0.3))
+# hook (starts 68): rising ticks as the figure climbs, success chime at the briefcase
 for j in range(4):
-    add(filt(noise(0.015), 'bandpass', [1500, 5000]) * np.exp(-tvec(0.015) * 300), cut(368 + 12 + j * 27 + 13), 0.12)
-add(sweep_noise(0.4, 800, 3000) * np.sin(np.linspace(0, np.pi, int(0.4 * SR))), cut(368 + 12 + 81 + 18), 0.08)  # email sent
+    add(speed(ticks[0], 1.0 + j * 0.18), cut(68 + 26 + (j + 1) * 11), 0.16, pan=-0.3 + j * 0.2, verb=0.3)
+add(confirm, cut(68 + 26 + 44 + 6), 0.16, verb=0.5)
 
-# certificate stamp
-add(boom(1.0, 60), cut(516), 0.5, verb=0.3)
-add(filt(noise(0.08), 'lowpass', 1800) * np.exp(-tvec(0.08) * 40), cut(516), 0.35)
-add(bell([1568, 2349, 3136], 2.0, 2.0), cut(518), 0.04, verb=0.9)
+# apps (starts 364): key taps while typing, mouse clicks on each app, sent swish
+for j in range(16):
+    add(speed(ticks[j % 2], rng.uniform(1.4, 1.9)), cut(376) + j * 0.065 + rng.random() * 0.015, 0.07, pan=rng.uniform(-0.3, 0.3))
+for j in range(4):
+    add(click, cut(364 + 12 + j * 27 + 13), 0.22)
+add(swish(slide[1], 1.2, 8000), cut(364 + 12 + 81 + 18), 0.10, pan=-0.5)
 
-# details: calendar flip, price count ticks + ding
-add(filt(noise(0.06), 'bandpass', [1000, 5000]) * np.exp(-tvec(0.06) * 50), cut(592), 0.12)
+# cert (starts 498): stamp
+st = cut(498 + 30)
+add(speed(thud[1], 0.7), st, 0.42, verb=0.3)
+add(speed(glass[1], 0.9), st + 0.03, 0.08, verb=0.9)
+
+# details (starts 586): calendar flip, price ticks, price ding
+add(swish(fan, 1.1, 8000), cut(586 + 16), 0.10)
 for j in range(14):
-    tt = tvec(0.04)
-    add(np.sin(2 * np.pi * (1200 + j * 60) * tt) * np.exp(-tt * 90), cut(628) + j * 0.075, 0.04)
-add(bell([1318.5, 1975.5, 2637], 2.0, 2.5), cut(662), 0.09, verb=0.7)
+    add(speed(ticks[1], 1.0 + j * 0.05), cut(586 + 52) + j * 0.075, 0.07)
+add(confirm, cut(586 + 86), 0.18, verb=0.6)
+add(speed(glass[0], 1.0), cut(586 + 86), 0.07, verb=0.8)
 
-# CTA: meter fill tone
-t = tvec(1.4)
-add(np.sin(2 * np.pi * (300 + 500 * (t / 1.4)) * t) * np.sin(np.linspace(0, np.pi, len(t))) * 0.5, cut(704), 0.05, verb=0.5)
-add(bell([2093, 2637, 3136], 1.5, 3), cut(746), 0.05, verb=0.8)
+# CTA (starts 706): meter completes
+add(confirm, cut(706 + 50), 0.14, verb=0.6)
 
-# outro: button pop
-add(bell([1046.5, 1318.5, 1568], 2.0, 2.0), cut(784 + 50), 0.05, verb=0.8)
+# outro (starts 790): register button pop
+add(speed(glass[1], 1.1), cut(790 + 50), 0.08, verb=0.8)
 
 # ------------------------------------------------------------------ MIX
 # reverb: stereo exponentially-decaying noise IR
